@@ -1,0 +1,52 @@
+"""
+app.py
+------
+Streamlit UI for the LangGraph chatbot.
+
+Launch with:
+    streamlit run app.py
+"""
+
+import streamlit as st
+from langgraph_bot import build_bot  # local import
+
+# ──────────────────────────────────────────────
+# Streamlit page setup
+# ──────────────────────────────────────────────
+st.set_page_config(page_title="LangGraph Chatbot", page_icon="🤖")
+st.title("🤖 LangGraph Multi-Route Chatbot")
+
+# One-time bot compile
+if "bot" not in st.session_state:
+    st.session_state.bot = build_bot()
+    st.session_state.history = []   # each item: {"role": "...", "content": "..."}
+
+# Show past turns
+for turn in st.session_state.history:
+    with st.chat_message(turn["role"]):
+        st.markdown(turn["content"])
+
+# New user input
+if user_msg := st.chat_input("Ask me something…"):
+    # 1. record + echo user
+    st.session_state.history.append({"role": "user", "content": user_msg})
+    with st.chat_message("user"):
+        st.markdown(user_msg)
+
+    # 2. call LangGraph
+    state = st.session_state.bot(
+        {"latest_message": user_msg, "history": st.session_state.history}
+    )
+    reply = state["bot_reply"]
+
+    # 3. record + echo bot
+    st.session_state.history.append({"role": "assistant", "content": reply})
+    with st.chat_message("assistant"):
+        st.markdown(reply)
+
+# Sidebar utilities
+with st.sidebar:
+    st.header("⚙️ Options")
+    if st.button("🔄  Clear conversation"):
+        st.session_state.history = []
+        st.experimental_rerun()

@@ -1,0 +1,156 @@
+"""
+langgraph_bot.py
+----------------
+Pure LangGraph logic:
+
+• Top-level routes : small-talk | FAQ | fallback
+• FAQ sub-routes   : payments  | orders | generic
+
+Import `build_bot()` from another script to get a ready-to-use chatbot.
+"""
+
+from langgraph.graph import Graph
+from langgraph.nodes import Node, End
+from langgraph.edges import Edge, ConditionalEdge
+
+# ──────────────────────────────────────────────
+# Lightweight helpers (swap for real models)
+# ──────────────────────────────────────────────
+def llm(prompt, system="You are a helpful assistant."):
+    """
+    Stub wrapper.  Replace with an actual model call, e.g.:
+
+        import openai, os
+        openai.api_key = os.getenv("OPENAI_API_KEY")
+        rsp = openai.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=[{"role":"system","content":system},
+                      {"role":"user","content":prompt}],
+        )
+        return rsp.choices[0].message.content.strip()
+    """
+    return f"(🤖 STUB-LLM) {prompt}"
+
+def classify_top_intent(msg: str) -> str:
+    msg = msg.lower()
+    if any(x in msg for x in ("hi", "hello", "how are you")):
+        return "small_talk"
+    if any(x in msg for x in ("price", "return", "shipping", "order", "payment")):
+        return "faq"
+    return "fallback"
+
+def classify_faq_topic(msg: str) -> str:
+    msg = msg.lower()
+    if any(x in msg for x in ("pay", "card", "refund", "invoice")):
+        return "payments"
+    if any(x in msg for x in ("track", "order", "status", "cancel")):
+        return "orders"
+    return "generic"
+
+# ──────────────────────────────────────────────
+# Graph factory
+# ──────────────────────────────────────────────
+def build_bot():
+    """
+    Compile and return a LangGraph chatbot.  Call once and reuse.
+    """
+
+    # Nodes ----------------------------------------------------
+    @Node()
+    def entry_node(state: dict) -> dict:
+        state["intent"] = classify_top_intent(state["latest_message"])
+        return state
+
+    @Node()
+    def small_talk_node(state: dict) -> dict:
+        state["bot_reply"] = llm(
+            state["latest_message"],
+            system="You are a friendly small-talk assistant."
+        )
+        return state
+
+    @Node()
+    def faq_router(state: dict) -> dict:
+        state["faq_topic"] = classify_faq_topic(state["latest_message"])
+        return state
+
+    @Node()
+    def faq_payments_node(state: dict) -> dict:
+        state["bot_reply"] = llm(
+            f"Answer briefly about **payments**: {state['latest_message']}",
+            system="You answer e-commerce payment questions."
+        )
+        return state
+
+    @Node()
+    def faq_orders_node(state: dict) -> dict:
+        state["bot_reply"] = llm(
+            f"Answer briefly about **orders**: {state['latest_message']}",
+            system="You answer order-related questions."
+        )
+        return state
+
+    @Node()
+    def faq_generic_node(state: dict) -> dict:
+        state["bot_reply"] = (
+            "Let me check that for you. Could you clarify your question?"
+        )
+        return state
+
+    @Node()
+    def fallback_node(state: dict) -> dict:
+        state["bot_reply"] = (
+            "I’m not sure I can help with that. I’ll bring a human agent in—please hold on."
+        )
+        return state
+
+    # Graph wiring --------------------------------------------
+    g = Graph()
+
+    g.add_nodes(
+        entry=entry_node,
+        small_talk=small_talk_node,
+        faq_router=faq_router,
+        faq_payments=faq_payments_node,
+        faq_orders=faq_orders_node,
+        faq_generic=faq_generic_node,
+        fallback=fallback_node,
+        end=End(),
+    )
+
+    # Leaf → end
+    g.add_edges([
+        ("small_talk",   "end"),
+        ("faq_payments", "end"),
+        ("faq_orders",   "end"),
+        ("faq_generic",  "end"),
+        ("fallback",     "end"),
+    ])
+
+    # Top-level routing
+    g.add_conditional_edges(
+        "entry",
+        ConditionalEdge(
+            condition_field="intent",
+            mapping={
+                "small_talk": "small_talk",
+                "faq":        "faq_router",
+                "fallback":   "fallback",
+            },
+        ),
+    )
+
+    # FAQ sub-routing
+    g.add_conditional_edges(
+        "faq_router",
+        ConditionalEdge(
+            condition_field="faq_topic",
+            mapping={
+                "payments": "faq_payments",
+                "orders":   "faq_orders",
+                "generic":  "faq_generic",
+            },
+        ),
+    )
+
+    return g.compile()
