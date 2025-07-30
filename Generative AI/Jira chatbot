@@ -1,0 +1,166 @@
+============================
+
+main.py
+
+============================
+
+from langgraph.graph import StateGraph, END from langchain.chat_models import ChatOpenAI from tools.jira_tool import jira_tool from tools.confluence_tool import confluence_tool from tools.routing import topic_router from memory.state_schema import ChatState from memory.memory_store import get_memory_reducer
+
+Define LLM
+
+llm = ChatOpenAI(model_name="gpt-4", temperature=0)
+
+Build LangGraph
+
+builder = StateGraph(ChatState)
+
+Add nodes
+
+builder.add_node("router", topic_router) builder.add_node("jira_tool", jira_tool) builder.add_node("confluence_tool", confluence_tool) builder.add_node("llm_fallback", llm)
+
+Add edges
+
+builder.set_entry_point("router") builder.add_conditional_edges("router", lambda state: state["route"], { "jira": "jira_tool", "confluence": "confluence_tool", "llm": "llm_fallback" }) builder.add_edge("jira_tool", END) builder.add_edge("confluence_tool", END) builder.add_edge("llm_fallback", END)
+
+Set reducer for memory
+
+builder.set_state_reducer(get_memory_reducer())
+
+Compile app
+
+graph = builder.compile()
+
+Run
+
+if name == "main": import streamlit as st from ui.ui import run_ui run_ui(graph)
+
+============================
+
+tools/jira_tool.py
+
+============================
+
+from langchain.tools import tool
+
+@tool def jira_tool(state): """Handles queries related to Jira tickets, statuses, and updates.""" user_input = state['input'] # Placeholder: integrate with Jira API here response = f"Simulated Jira response for query: {user_input}" return {"output": response}
+
+============================
+
+tools/confluence_tool.py
+
+============================
+
+from langchain.tools import tool
+
+@tool def confluence_tool(state): """Handles Confluence documentation questions using embeddings.""" user_input = state['input'] # Placeholder: run semantic search or retrieval on indexed Confluence data response = f"Simulated Confluence response for: {user_input}" return {"output": response}
+
+============================
+
+tools/routing.py
+
+============================
+
+from langchain.chat_models import ChatOpenAI
+
+llm = ChatOpenAI(model_name="gpt-4", temperature=0)
+
+def topic_router(state): user_input = state["input"].lower()
+
+if "jira" in user_input or "ticket" in user_input:
+    route = "jira"
+elif "confluence" in user_input or "document" in user_input:
+    route = "confluence"
+else:
+    route = "llm"
+
+return {"route": route, "input": user_input}
+
+============================
+
+memory/state_schema.py
+
+============================
+
+from typing import TypedDict, List, Optional
+
+class ChatState(TypedDict): input: str output: Optional[str] messages: List[dict]  # Example: [{"role": "user", "content": "..."}] autosummarize: bool summary_count: int summary: Optional[str] route: Optional[str]
+
+============================
+
+memory/memory_store.py
+
+============================
+
+from langgraph.graph.message import add_messages from langchain_core.runnables import RunnableConfig from typing import Any
+
+def get_memory_reducer(): def reducer(state: dict, config: RunnableConfig = None) -> dict: input_message = {"role": "user", "content": state["input"]} if "output" in state and state["output"]: output_message = {"role": "assistant", "content": state["output"]} else: output_message = {}
+
+history = state.get("messages", [])
+    history += [input_message]
+    if output_message:
+        history += [output_message]
+
+    return {**state, "messages": history}
+
+return reducer
+
+============================
+
+ui/ui.py
+
+============================
+
+import streamlit as st from langgraph.graph import CompiledGraph
+
+def init_session(): if "chat_history" not in st.session_state: st.session_state.chat_history = [] if "user_input" not in st.session_state: st.session_state.user_input = ""
+
+def run_ui(graph: CompiledGraph): st.set_page_config(page_title="Jira + Confluence Chatbot", layout="wide") st.title("🤖 Jira + Confluence Assistant")
+
+init_session()
+
+# Sidebar - History
+with st.sidebar:
+    st.header("📜 Chat History")
+    if st.session_state.chat_history:
+        for i, msg in enumerate(st.session_state.chat_history):
+            st.text(f"{i+1}. {msg['input'][:40]}...")
+    else:
+        st.write("No messages yet.")
+
+    if st.button("🧹 Clear History"):
+        st.session_state.chat_history = []
+
+# Main Chat Area
+for msg in st.session_state.chat_history:
+    with st.chat_message("user"):
+        st.markdown(msg["input"])
+    with st.chat_message("assistant"):
+        st.markdown(msg["output"])
+
+# Chat Input
+user_input = st.chat_input("Ask me anything about Jira or Confluence...")
+if user_input:
+    state = {
+        "input": user_input,
+        "messages": [],
+        "autosummarize": False,
+        "summary_count": 0,
+        "summary": "",
+        "route": "",
+    }
+
+    result = graph.invoke(state)
+    answer = result.get("output", "Sorry, no response generated.")
+
+    # Save to session state
+    st.session_state.chat_history.append({
+        "input": user_input,
+        "output": answer
+    })
+
+    # Display latest exchange
+    with st.chat_message("user"):
+        st.markdown(user_input)
+    with st.chat_message("assistant"):
+        st.markdown(answer)
+
